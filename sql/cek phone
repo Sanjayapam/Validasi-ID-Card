@@ -1,0 +1,56 @@
+SELECT 
+    ClientID,
+    ClientName,
+    PhoneNumber AS Data_Asli,
+    
+    -- PROSES FINAL: Menyeragamkan Awalan (Prefix)
+    CASE 
+        -- Jika setelah dibersihkan depannya '62', ganti jadi '0'
+        WHEN LEFT(Hanya_Angka, 2) = '62' THEN '0' + SUBSTRING(Hanya_Angka, 3, 20)
+        -- Jika depannya bukan '0' (misal langsung 882), tambahkan '0'
+        WHEN LEFT(Hanya_Angka, 1) <> '0' THEN '0' + Hanya_Angka
+        ELSE Hanya_Angka 
+    END AS No_HP_Clean
+
+FROM (
+    -- TAHAP 1: Membuang Karakter Pengganggu (Spasi, Strip, Plus, Titik)
+    -- Ini tidak mengubah database, hanya "membersihkan" di memori sementara
+    SELECT 
+        ClientID, 
+        ClientName, 
+        PhoneNumber,
+        REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(PhoneNumber, '+', ''), '-', ''), ' ', ''), '.', ''), '(', '') AS Hanya_Angka
+    FROM Data_BRNet_Clients
+    WHERE PhoneNumber IS NOT NULL AND PhoneNumber <> ''
+) AS SubQuery_Pembersih;
+--------------------------------------------------------------------------
+
+SELECT 
+    StandardPhone,
+    COUNT(ClientID) AS Jumlah_Nasabah,
+    STRING_AGG(ClientName, ' | ') AS List_Nama_Nasabah
+FROM (
+    SELECT 
+        ClientID,
+        ClientName,
+        -- LOGIKA CLEANSING DI DALAM SELECT (TIDAK MENGUBAH TABEL ASLI)
+        CASE 
+            -- 1. Buang semua karakter non-angka (+ , - , spasi, .)
+            -- 2. Seragamkan awalan ke '0'
+            WHEN LEFT(Clean, 2) = '62' THEN '0' + SUBSTRING(Clean, 3, 20)
+            WHEN LEFT(Clean, 3) = '+62' THEN '0' + SUBSTRING(Clean, 4, 20)
+            WHEN LEFT(Clean, 1) = '0' THEN Clean
+            ELSE '0' + Clean 
+        END AS StandardPhone
+    FROM (
+        -- Subquery untuk membersihkan simbol terlebih dahulu
+        SELECT 
+            ClientID, 
+            ClientName,
+            REPLACE(REPLACE(REPLACE(REPLACE(PhoneNumber, '+', ''), '-', ''), ' ', ''), '.', '') AS Clean
+        FROM Data_BRNet_Clients -- Ganti dengan nama tabelmu
+        WHERE PhoneNumber IS NOT NULL AND PhoneNumber <> ''
+    ) AS RawData
+) AS FinalData
+GROUP BY StandardPhone
+HAVING COUNT(ClientID) > 1; -- Menampilkan hanya yang duplikat
