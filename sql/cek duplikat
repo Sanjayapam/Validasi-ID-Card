@@ -1,0 +1,8 @@
+-- Mendeteksi 1 No. KTP yang digunakan lebih dari 1 Client
+SELECT 
+    ID_Card_Number, 
+    COUNT(ClientID) AS Total_Nasabah
+FROM Acquisition_Table
+WHERE ID_Card_Number IS NOT NULL AND ID_Card_Number <> ''
+GROUP BY ID_Card_Number
+HAVING COUNT(ClientID) > 1;
