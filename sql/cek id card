@@ -1,0 +1,49 @@
+SELECT 
+    ClientID,
+    ClientName,
+    ID_Card_Number,
+    Gender,
+    BirthDate, 
+    Branch_Type, 
+    
+    -- 1. Deteksi ID Card Input (Blank)
+    CASE 
+        WHEN ID_Card_Number IS NULL OR TRIM(ID_Card_Number) = '' 
+        THEN 'KTP Kosong (Blank)'
+        
+        -- 2. Deteksi Input ID Card ≠ Number (Bukan Angka)
+        WHEN ID_Card_Number LIKE '%[^0-9]%' 
+        THEN 'ID Mengandung Karakter Non-Angka'
+        
+        -- 3. Deteksi Input ID Card ≠ 16 Digit Number
+        WHEN LEN(ID_Card_Number) <> 16 
+        THEN 'ID Tidak 16 Digit'
+        
+        -- 4. Deteksi Number DOB in ID Card ≠ DOB ID Card (Pola DOB Wanita +40)
+        -- Pola KTP: Digit ke 7-12 adalah DDMMYY. Untuk wanita, Tanggal + 40.
+        WHEN Gender = 'Female' 
+             AND CAST(SUBSTRING(ID_Card_Number, 7, 2) AS INT) < 41 
+        THEN 'Pola DOB Wanita Salah (Harus Tanggal + 40)'
+        
+        WHEN Gender = 'Male' 
+             AND CAST(SUBSTRING(ID_Card_Number, 7, 2) AS INT) > 31 
+        THEN 'Pola DOB Pria Salah (Tanggal Melebihi 31)'
+
+        ELSE 'Data Valid'
+    END AS Status_Audit
+
+FROM Data_BRNet_Clients
+WHERE Disbursed_Date IS NOT NULL; -- Hanya untuk data yang sudah cair (Disbursed)
+
+---
+
+-- 5. Deteksi Input ID Card ≠ 1 Client (ID Ganda / Duplikat)
+-- Digunakan untuk melihat ID mana yang dipakai lebih dari 1 orang
+SELECT 
+    ID_Card_Number, 
+    COUNT(ClientID) AS Total_Clients,
+    STRING_AGG(ClientName, ', ') AS Nama_Nasabah_Terkait
+FROM Data_BRNet_Clients
+WHERE ID_Card_Number IS NOT NULL AND ID_Card_Number <> ''
+GROUP BY ID_Card_Number
+HAVING COUNT(ClientID) > 1;
