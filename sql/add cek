@@ -1,0 +1,83 @@
+SELECT 
+    ClientID,
+    ClientName,
+    ID_Card_Number AS NIK,
+    Gender,
+    BirthDate,
+    Disbursed_Date,
+    Branch_Type, -- GL atau IL
+
+    -- [LOGIKA AUDIT STANDAR - Dari Query Sebelumnya]
+    CASE 
+        WHEN LEN(ID_Card_Number) <> 16 THEN 'REJECT: NIK Harus 16 Digit'
+        WHEN ID_Card_Number LIKE '%[^0-9]%' THEN 'REJECT: NIK Bukan Angka'
+        WHEN Gender = 'Female' AND CAST(SUBSTRING(ID_Card_Number, 7, 2) AS INT) NOT BETWEEN 41 AND 71 
+            THEN 'SUSPICION: Pola NIK Wanita Tidak Sinkron'
+        WHEN Gender = 'Male' AND CAST(SUBSTRING(ID_Card_Number, 7, 2) AS INT) NOT BETWEEN 1 AND 31 
+            THEN 'SUSPICION: Pola NIK Pria Tidak Sinkron'
+        
+        -- [TAMBAHAN ANALISA ANOMALI & FRAUD]
+
+        -- 1. Deteksi Usia Tidak Wajar (Berdasarkan NIK vs Sistem)
+        -- Jika usia di NIK dan sistem berbeda jauh, atau usia nasabah < 17 tahun saat pencairan
+        WHEN DATEDIFF(YEAR, BirthDate, Disbursed_Date) < 17 
+            THEN 'FRAUD: Nasabah di bawah umur (Child Identity Fraud)'
+
+        -- 2. Deteksi NIK "Cantik" atau Mencurigakan
+        -- Seringkali fraud menggunakan angka urut belakang (0000, 1111, 1234)
+        WHEN RIGHT(ID_Card_Number, 4) IN ('0000', '1111', '1234', '9999')
+            THEN 'SUSPICION: NIK dengan Nomor Urut Mencurigakan'
+
+        -- 3. Deteksi Duplikasi Identitas (Self-Join Logics)
+        -- Mengecek apakah NIK yang sama terdaftar dengan nama yang berbeda (Indikasi KTP Aspal)
+        WHEN EXISTS (
+            SELECT 1 FROM Data_BRNet_Clients d2 
+            WHERE d2.ID_Card_Number = Data_BRNet_Clients.ID_Card_Number 
+            AND d2.ClientID <> Data_BRNet_Clients.ClientID
+            AND d2.ClientName <> Data_BRNet_Clients.ClientName
+        ) THEN 'FRAUD: 1 NIK digunakan banyak nama (Identity Theft)'
+
+        -- 4. Deteksi Tanggal Lahir Sistem vs Tanggal Lahir NIK Tidak Sinkron
+        -- Memastikan 6 digit tengah NIK benar-benar sama dengan BirthDate di sistem
+        WHEN 
+            (Gender = 'Male' AND CAST(SUBSTRING(ID_Card_Number, 7, 2) AS INT) <> DAY(BirthDate)) OR
+            (Gender = 'Female' AND CAST(SUBSTRING(ID_Card_Number, 7, 2) AS INT) <> (DAY(BirthDate) + 40)) OR
+            (SUBSTRING(ID_Card_Number, 9, 2) <> FORMAT(MONTH(BirthDate), '00'))
+            THEN 'FRAUD: NIK Manipulasi (Data Sistem & NIK berbeda)'
+
+        -- 5. Deteksi Pencairan di Hari yang Sama (Double Loan Fraud)
+        WHEN EXISTS (
+            SELECT 1 FROM Data_BRNet_Clients d3
+            WHERE d3.ID_Card_Number = Data_BRNet_Clients.ID_Card_Number
+            AND d3.Disbursed_Date = Data_BRNet_Clients.Disbursed_Date
+            AND d3.ClientID <> Data_BRNet_Clients.ClientID
+        ) THEN 'FRAUD: Double Loan di hari yang sama'
+
+        ELSE 'VALID'
+    END AS Analisa_Fraud_Status
+
+FROM Data_BRNet_Clients
+WHERE Disbursed_Date IS NOT NULL;
+
+-- Tambahan ke dalam blok CASE standar
+---------------------------------------
+
+-- 1. Deteksi Nasabah "Terlalu Tua" (Ages Indicator)
+WHEN DATEDIFF(YEAR, BirthDate, GETDATE()) > 70 
+    THEN 'SUSPICION: Usia Nasabah > 70 Tahun (High Risk)'
+
+-- 2. Deteksi No. KK Ganda (Input Family Card ≠ 1 Client)
+WHEN EXISTS (
+    SELECT 1 FROM Data_BRNet_Clients d2 
+    WHERE d2.Family_Card_Number = Data_BRNet_Clients.Family_Card_Number 
+    AND d2.ClientID <> Data_BRNet_Clients.ClientID
+    AND d2.Family_Card_Number NOT IN ('', '0') -- Abaikan jika kosong
+) THEN 'ANOMALY: No. KK digunakan oleh Client lain (Potensi Dokumen Sama)'
+
+-- 3. Deteksi NIK dengan Kode Wilayah Tidak Valid
+WHEN LEFT(ID_Card_Number, 2) NOT BETWEEN '11' AND '94'
+    THEN 'INVALID: Kode Provinsi NIK Tidak Terdaftar'
+
+-- 4. Cross-Check Kode Wilayah KTP vs KK
+WHEN LEFT(ID_Card_Number, 6) <> LEFT(Family_Card_Number, 6)
+    THEN 'LOGIC CHECK: Wilayah KTP & KK Berbeda (Perlu Verifikasi Domisili)'
