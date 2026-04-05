@@ -1,0 +1,209 @@
+WITH base AS (
+    SELECT
+        c.id_client,
+        c.id_accountloan,
+        c.name_client,
+        c.gender,
+        c.id_card,
+        c.family_card,
+        c.birthdate,
+        c.branch,
+        c.branch_type,
+        c.address,
+        c.residence_status,
+        c.marital_status,
+        c.spouse_name,
+        d.phone,
+        d.guarantor,
+        l.loanamount,
+        l.loan_status,
+        l.disbursement_date
+    FROM t_client c
+    LEFT JOIN t_profil d 
+        ON c.id_client = d.id_client
+    LEFT JOIN t_loan l 
+        ON c.id_client = l.id_client
+        AND c.id_accountloan = l.id_accountloan
+    WHERE c.product = 'group lending'
+),
+
+/* ------------------------------------------------ */
+/* PHONE CLEANING */
+/* ------------------------------------------------ */
+
+phone_cleaning AS (
+    SELECT *,
+        REPLACE(REPLACE(REPLACE(phone,'-',''),' ',''),'+','') AS phone_raw
+    FROM base
+),
+
+phone_standard AS (
+    SELECT *,
+        CASE
+            WHEN phone_raw LIKE '62%' THEN '0' + SUBSTRING(phone_raw,3,20)
+            WHEN phone_raw LIKE '8%' THEN '0' + phone_raw
+            WHEN phone_raw LIKE '08%' THEN phone_raw
+            ELSE phone_raw
+        END AS phone_cleaned
+    FROM phone_cleaning
+),
+
+/* ------------------------------------------------ */
+/* DUPLICATE CHECK */
+/* ------------------------------------------------ */
+
+duplicate_check AS (
+    SELECT *,
+        COUNT(*) OVER (PARTITION BY id_card) AS dup_ktp,
+        COUNT(*) OVER (PARTITION BY phone_cleaned) AS dup_phone,
+        COUNT(*) OVER (PARTITION BY guarantor) AS dup_guarantor
+    FROM phone_standard
+),
+
+/* ------------------------------------------------ */
+/* KRI RULE ENGINE */
+/* ------------------------------------------------ */
+
+kri_rules AS (
+SELECT
+*,
+
+/* ID CARD CHECK */
+
+CASE 
+WHEN id_card IS NULL OR LTRIM(RTRIM(id_card)) = '' 
+    THEN 'ID blank'
+WHEN id_card LIKE '%[^0-9]%' 
+    THEN 'ID not number'
+WHEN LEN(id_card) <> 16 
+    THEN 'ID not 16 digit'
+WHEN gender = 'male' 
+     AND TRY_CAST(SUBSTRING(id_card,7,2) AS INT) NOT BETWEEN 1 AND 31
+    THEN 'DOB male invalid'
+WHEN gender = 'female'
+     AND TRY_CAST(SUBSTRING(id_card,7,2) AS INT) NOT BETWEEN 41 AND 71
+    THEN 'DOB female invalid'
+WHEN TRY_CAST(SUBSTRING(id_card,9,2) AS INT) NOT BETWEEN 1 AND 12
+    THEN 'DOB month invalid'
+ELSE 'valid'
+END AS kri_id_card,
+
+/* FAMILY CARD */
+
+CASE
+WHEN family_card IS NULL OR LTRIM(RTRIM(family_card)) = ''
+    THEN 'KK blank'
+WHEN family_card LIKE '%[^0-9]%'
+    THEN 'KK not number'
+WHEN LEN(family_card) <> 16
+    THEN 'KK not 16 digit'
+ELSE 'valid'
+END AS kri_family_card,
+
+/* PHONE INPUT */
+
+CASE
+WHEN phone_cleaned IS NULL OR phone_cleaned = ''
+    THEN 'phone blank'
+ELSE 'valid'
+END AS kri_phone,
+
+/* GUARANTOR */
+
+CASE
+WHEN guarantor IS NULL OR LTRIM(RTRIM(guarantor)) = ''
+    THEN 'guarantor blank'
+ELSE 'valid'
+END AS kri_guarantor,
+
+/* ADDRESS */
+
+CASE
+WHEN address IS NULL OR LTRIM(RTRIM(address)) = ''
+    THEN 'address blank'
+ELSE 'valid'
+END AS kri_address,
+
+/* RESIDENCE STATUS */
+
+CASE
+WHEN residence_status IS NULL
+    THEN 'residence blank'
+ELSE 'valid'
+END AS kri_residence,
+
+/* SPOUSE */
+
+CASE
+WHEN marital_status = 'married'
+     AND (spouse_name IS NULL OR LTRIM(RTRIM(spouse_name))='')
+    THEN 'spouse blank'
+ELSE 'valid'
+END AS kri_spouse,
+
+/* DUPLICATE ID */
+
+CASE
+WHEN dup_ktp > 1
+    THEN 'duplicate ktp'
+ELSE 'valid'
+END AS kri_duplicate_ktp,
+
+/* DUPLICATE PHONE */
+
+CASE
+WHEN dup_phone > 1
+    THEN 'duplicate phone'
+ELSE 'valid'
+END AS kri_duplicate_phone,
+
+/* DOUBLE GUARANTOR */
+
+CASE
+WHEN dup_guarantor > 1
+    THEN 'guarantor >1 client'
+ELSE 'valid'
+END AS kri_duplicate_guarantor
+
+FROM duplicate_check
+),
+
+/* ------------------------------------------------ */
+/* DOUBLE LOAN CHECK */
+/* ------------------------------------------------ */
+
+double_loan AS (
+SELECT
+*,
+COUNT(*) OVER (PARTITION BY id_card) AS active_loan_count
+FROM kri_rules
+)
+
+SELECT
+id_client,
+id_accountloan,
+name_client,
+branch,
+branch_type,
+loanamount,
+disbursement_date,
+
+kri_id_card,
+kri_family_card,
+kri_phone,
+kri_guarantor,
+kri_address,
+kri_residence,
+kri_spouse,
+kri_duplicate_ktp,
+kri_duplicate_phone,
+kri_duplicate_guarantor,
+
+CASE
+WHEN active_loan_count > 1 AND loan_status = 'active'
+THEN 'double loan'
+ELSE 'valid'
+END AS kri_double_loan
+
+FROM double_loan
+ORDER BY disbursement_date DESC;
