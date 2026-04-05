@@ -207,3 +207,18 @@ END AS kri_double_loan
 
 FROM double_loan
 ORDER BY disbursement_date DESC;
+
+--------------------------------------
+---ews
+SELECT
+branch,
+COUNT(*) total_client,
+
+SUM(CASE WHEN kri_id_card <> 'valid' THEN 1 ELSE 0 END) id_card_issue,
+SUM(CASE WHEN kri_family_card <> 'valid' THEN 1 ELSE 0 END) family_card_issue,
+SUM(CASE WHEN kri_phone <> 'valid' THEN 1 ELSE 0 END) phone_issue,
+SUM(CASE WHEN kri_duplicate_ktp <> 'valid' THEN 1 ELSE 0 END) duplicate_ktp,
+SUM(CASE WHEN kri_double_loan <> 'valid' THEN 1 ELSE 0 END) double_loan
+
+FROM double_loan
+GROUP BY branch
